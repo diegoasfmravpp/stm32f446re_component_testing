@@ -23,6 +23,9 @@
 /* USER CODE BEGIN Includes */
 #include <string.h>
 #include <stdio.h>
+#include <stdbool.h>
+
+#include  "pid.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -60,6 +63,17 @@ static void MX_ADC1_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+// Simulate one step of balloon pressure dynamics
+
+//void read_pressure() {
+//	HAL_ADC_Start(&hadc1);
+//	HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
+//	raw = HAL_ADC_GetValue(&hadc1);
+//
+//	sprintf(msg, "%hu\r\n", raw);
+//	HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+//	HAL_Delay(1);
+//}
 
 /* USER CODE END 0 */
 
@@ -72,7 +86,14 @@ int main(void)
 
   /* USER CODE BEGIN 1 */
   uint16_t raw;
-  char msg[10];
+  char msg[64];
+
+  //simulation
+  float t = 0;
+  float dt = 0.01f;
+  float pressure = 0.0;
+  float setpoint = 15.0f;
+
 
   /* USER CODE END 1 */
 
@@ -82,6 +103,8 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
+  PID pressure_pid;
+  pid_init(&pressure_pid, 1.0f, 0.0f, 0.0f, 5.0f, 0.3f);
 
   /* USER CODE END Init */
 
@@ -97,6 +120,21 @@ int main(void)
   MX_USART2_UART_Init();
   MX_ADC1_Init();
   /* USER CODE BEGIN 2 */
+  uint32_t last_time = HAL_GetTick();
+
+  void simulate_step(bool inlet_open, bool exhaust_open, float *pressure, float dt) {
+      const float rate_in = 10.0;   // psi/sec
+      const float rate_out = 12.0;  // psi/sec
+
+      if (inlet_open)
+          *pressure += rate_in * dt;
+      else if (exhaust_open)
+          *pressure -= rate_out * dt;
+
+      // Clamp pressure to realistic bounds
+      if (*pressure < 0) *pressure = 0;
+      if (*pressure > 30) *pressure = 30;
+  }
 
   /* USER CODE END 2 */
 
@@ -104,13 +142,45 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-	  HAL_ADC_Start(&hadc1);
-	  HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
-	  raw = HAL_ADC_GetValue(&hadc1);
+//	  uint32_t now = HAL_GetTick();
+//	  float dt = (now - last_time) / 1000.0f; // convert ms to seconds
+//	  last_time = now;
+	  float error = setpoint - pressure;
+	  float control = pid_advance(&pressure_pid, error, dt);
 
-	  sprintf(msg, "%hu\r\n", raw);
+	  bool inflate = false;
+	  bool deflate = false;
+	  float threshold = 0.2f;
+
+	  if (control > threshold) inflate = true;
+	  else if (control < -threshold) deflate = true;
+
+	  simulate_step(inflate, deflate, &pressure, dt);
+
+//	  uint16_t pressure_int = (uint16_t)(pressure * 100);
+
+//	  sprintf(msg, "%u\r\n", pressure_int);  // %u for uint16_t
+//	  HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+
+	  sprintf(msg, "%.2f,%.2f,%.2f\n", t, pressure, control);  // CSV format
 	  HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
-	  HAL_Delay(1);
+
+	  HAL_Delay(10);  // 10ms = dt
+	  t += dt;
+
+
+//	  if (control > threshold) {
+//		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);   // inlet valve ON
+//		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET); // exhaust valve OFF
+//	  } else if (control < -threshold) {
+//		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET); // inlet valve OFF
+//		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_SET);   // exhaust valve ON
+//	  } else {
+//		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
+//		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET);
+//	  }
+
+
 //	  if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) == GPIO_PIN_RESET)
 //	  {
 //		  HAL_Delay(50);
