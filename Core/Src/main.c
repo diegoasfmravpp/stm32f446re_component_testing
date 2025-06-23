@@ -24,7 +24,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdbool.h>
-
+#include <math.h>
 #include  "pid.h"
 /* USER CODE END Includes */
 
@@ -86,14 +86,23 @@ int main(void)
 
   /* USER CODE BEGIN 1 */
   uint16_t raw;
-  char msg[64];
+  char msg[256];
+
+  #define NUM_BLADDERS 3
 
   //simulation
   float t = 0;
   float dt = 0.01f;
   float pressure = 0.0;
   float setpoint = 15.0f;
-
+  float ref_signal = 0.0f;
+  float pressures[NUM_BLADDERS] = {0};
+  float ref_signals[NUM_BLADDERS] = {0};
+  float controls[NUM_BLADDERS] = {0};
+  float errors[NUM_BLADDERS] = {0};
+  bool inflates[NUM_BLADDERS] = {false};
+  bool deflates[NUM_BLADDERS] = {false};
+  PID pids[NUM_BLADDERS];
 
   /* USER CODE END 1 */
 
@@ -103,8 +112,11 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-  PID pressure_pid;
-  pid_init(&pressure_pid, 1.0f, 0.0f, 0.0f, 5.0f, 0.3f);
+  for (int i = 0; i < NUM_BLADDERS; i++){
+	  pid_init(&pids[i], 0.2f, 0.0f, 0.0f, 5.0f, 0.3f);
+  }
+//  PID pressure_pid;
+//  pid_init(&pressure_pid, 0.2f, 0.0f, 0.0f, 5.0f, 0.3f);
 
   /* USER CODE END Init */
 
@@ -121,6 +133,8 @@ int main(void)
   MX_ADC1_Init();
   /* USER CODE BEGIN 2 */
   uint32_t last_time = HAL_GetTick();
+  sprintf(msg, "RESET\n");  // CSV format
+  HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
 
   void simulate_step(bool inlet_open, bool exhaust_open, float *pressure, float dt) {
       const float rate_in = 10.0;   // psi/sec
@@ -142,57 +156,80 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-//	  uint32_t now = HAL_GetTick();
-//	  float dt = (now - last_time) / 1000.0f; // convert ms to seconds
-//	  last_time = now;
-	  float error = setpoint - pressure;
-	  float control = pid_advance(&pressure_pid, error, dt);
 
-	  bool inflate = false;
-	  bool deflate = false;
+//	  ref_signal = 0.5f * 15.0 * (sinf(2 * M_PI * 0.1 * t) + 1.0f);
 	  float threshold = 0.2f;
 
-	  if (control > threshold) inflate = true;
-	  else if (control < -threshold) deflate = true;
+	  int len = 0;
 
-	  simulate_step(inflate, deflate, &pressure, dt);
+//	  len += sprintf(msg + len, "%.2f,", t);
+	  len += sprintf(msg + len, "{\"t\":%.2f,\"bladders\":[", t);
 
-//	  uint16_t pressure_int = (uint16_t)(pressure * 100);
 
-//	  sprintf(msg, "%u\r\n", pressure_int);  // %u for uint16_t
-//	  HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+	  for (int i = 0; i < NUM_BLADDERS; i++){
+//		  ref_signals[i]=15.0;
+		  ref_signals[i] = 0.5f * 15.0 * (sinf(2 * M_PI * 0.1 * t + i*2) + 1.0f);
 
-	  sprintf(msg, "%.2f,%.2f,%.2f\n", t, pressure, control);  // CSV format
+		  inflates[i] = false;
+		  deflates[i] = false;
+
+		  errors[i] = ref_signals[i] - pressures[i];
+		  controls[i] = pid_advance(&pids[i], errors[i], dt);
+
+		  if (controls[i] > threshold) inflates[i] = true;
+		  else if (controls[i] < -threshold) deflates[i] = true;
+
+		  simulate_step(inflates[i], deflates[i], &pressures[i], dt);
+
+//		  len += sprintf(msg + len, "%.2f,%.2f,%.2f,", pressures[i], controls[i], ref_signals[i]);
+
+
+		  len += sprintf(msg + len,
+						 "{\"p\":%.2f,\"u\":%.2f,\"r\":%.2f}%s",
+						 pressures[i],
+						 controls[i],
+						 ref_signals[i],
+						 (i == NUM_BLADDERS - 1) ? "" : ",");
+	  }
+	  len += sprintf(msg + len, "]}\r\n");
+
+
+//	  sprintf(msg, "%.2f,%.2f,%.2f,%.2f\r\n", t, pressures, controls, ref_signals);  // CSV format
 	  HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
 
 	  HAL_Delay(10);  // 10ms = dt
 	  t += dt;
 
-
-//	  if (control > threshold) {
-//		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);   // inlet valve ON
-//		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET); // exhaust valve OFF
-//	  } else if (control < -threshold) {
-//		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET); // inlet valve OFF
-//		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_SET);   // exhaust valve ON
-//	  } else {
-//		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
-//		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET);
-//	  }
+//	  float error = ref_signal - pressure;
+//	  float control = pid_advance(&pressure_pid, error, dt);
 
 
-//	  if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) == GPIO_PIN_RESET)
-//	  {
-//		  HAL_Delay(50);
-//		  if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) == GPIO_PIN_RESET)
-//			  HAL_GPIO_TogglePin (GPIOA, GPIO_PIN_10);
-//		  while (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) == GPIO_PIN_RESET);
-//		  HAL_Delay(50);
+//	  float threshold = 0.2f;
+//
+//	  if (control > threshold) inflate = true;
+//	  else if (control < -threshold) deflate = true;
+//
+//	  simulate_step(inflate, deflate, &pressure, dt);
+
+//	  sprintf(msg, "%.2f,%.2f,%.2f,%.2f\r\n", t, pressure, control, ref_signal);  // CSV format
+//	  HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+//
+//	  HAL_Delay(10);  // 10ms = dt
+//	  t += dt;
+
+//	  if (inflate){
+//		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_SET);
+//		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_9, GPIO_PIN_RESET);
 //	  }
-//	  else
-//	  {
-//		  HAL_GPIO_WritePin (GPIOA, GPIO_PIN_10, GPIO_PIN_RESET);
+//	  else if (deflate){
+//		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_RESET);
+//		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_9, GPIO_PIN_SET);
 //	  }
+//	  else {
+//		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_RESET);
+//		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_9, GPIO_PIN_RESET);
+//	  }
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -351,7 +388,7 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, LD2_Pin|GPIO_PIN_8|GPIO_PIN_9, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
@@ -359,12 +396,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : LD2_Pin */
-  GPIO_InitStruct.Pin = LD2_Pin;
+  /*Configure GPIO pins : LD2_Pin PA8 PA9 */
+  GPIO_InitStruct.Pin = LD2_Pin|GPIO_PIN_8|GPIO_PIN_9;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
