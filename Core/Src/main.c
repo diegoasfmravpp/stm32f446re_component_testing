@@ -35,7 +35,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define ADC_BUF_LEN 4096
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -45,16 +45,19 @@
 
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc1;
+DMA_HandleTypeDef hdma_adc1;
 
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
+uint16_t adc_buf[ADC_BUF_LEN];
 
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_ADC1_Init(void);
 /* USER CODE BEGIN PFP */
@@ -85,17 +88,13 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-  uint16_t raw;
-  char msg[256];
+  char msg[512];
 
   #define NUM_BLADDERS 3
 
   //simulation
   float t = 0;
   float dt = 0.01f;
-  float pressure = 0.0;
-  float setpoint = 15.0f;
-  float ref_signal = 0.0f;
   float pressures[NUM_BLADDERS] = {0};
   float ref_signals[NUM_BLADDERS] = {0};
   float controls[NUM_BLADDERS] = {0};
@@ -113,7 +112,7 @@ int main(void)
 
   /* USER CODE BEGIN Init */
   for (int i = 0; i < NUM_BLADDERS; i++){
-	  pid_init(&pids[i], 0.2f, 0.0f, 0.0f, 5.0f, 0.3f);
+	  pid_init(&pids[i], 0.1f + 0.1*i, 0.0f, 0.0f, 5.0f, 0.3f);
   }
 //  PID pressure_pid;
 //  pid_init(&pressure_pid, 0.2f, 0.0f, 0.0f, 5.0f, 0.3f);
@@ -129,10 +128,10 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_USART2_UART_Init();
   MX_ADC1_Init();
   /* USER CODE BEGIN 2 */
-  uint32_t last_time = HAL_GetTick();
   sprintf(msg, "RESET\n");  // CSV format
   HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
 
@@ -149,6 +148,7 @@ int main(void)
       if (*pressure < 0) *pressure = 0;
       if (*pressure > 30) *pressure = 30;
   }
+  HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_buf, ADC_BUF_LEN);
 
   /* USER CODE END 2 */
 
@@ -308,7 +308,7 @@ static void MX_ADC1_Init(void)
   hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
   hadc1.Init.Resolution = ADC_RESOLUTION_12B;
   hadc1.Init.ScanConvMode = DISABLE;
-  hadc1.Init.ContinuousConvMode = DISABLE;
+  hadc1.Init.ContinuousConvMode = ENABLE;
   hadc1.Init.DiscontinuousConvMode = DISABLE;
   hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
   hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
@@ -370,6 +370,22 @@ static void MX_USART2_UART_Init(void)
 }
 
 /**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA2_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA2_Stream0_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA2_Stream0_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA2_Stream0_IRQn);
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -409,7 +425,14 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-
+// callback when first half of buffer filled
+void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef* hadc){
+	HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_SET);
+}
+// callback when buffer completely filled
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc){
+	HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+}
 /* USER CODE END 4 */
 
 /**
